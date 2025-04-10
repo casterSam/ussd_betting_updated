@@ -8,14 +8,12 @@ const MPESA_CONSUMER_KEY = 'FkyGC14QM6A0yGZF4DVImGUWOEzqKd2pX5Ha3jQsfAsz6Snk';
 const MPESA_CONSUMER_SECRET = 'aSw3BmSuHNXvDkUIyRt4BzfqUYS9KiKRp5uooVccQFbtWUpDt3ycHxx4g4oJZz68';
 const MPESA_AUTH_URL = 'https://sandbox.safaricom.co.ke/oauth/v1/generate?grant_type=client_credentials';
 const MPESA_STK_PUSH_URL = 'https://sandbox.safaricom.co.ke/mpesa/stkpush/v1/processrequest';
-const CALLBACK_URL = 'https://sandbox.safaricom.co.ke/mpesa/stkpush/v1/processrequest';
-const PAYMENT_VERIFICATION_URL = 'https://sandbox.safaricom.co.ke/mpesa/stkpush/v1/processrequest'; // Your payment verification endpoint
+const CALLBACK_URL = 'https://sandbox.safaricom.co.ke/mpesa/stkpush/v1/processrequest'; // Replace with your actual callback URL
 
 // Configuration constants
 const SCRAPE_TIMEOUT = 5000;
 const LAMBDA_TIMEOUT = 8000;
 const CACHE_TTL = 300000; // 5 minutes
-const PAYMENT_AMOUNT = 5; // KSH 5
 
 // Response templates
 const RESPONSES = {
@@ -27,13 +25,8 @@ const RESPONSES = {
   paymentPrompt: 'CON To view the tips, please pay Ksh 5 via MPesa.\nYou will receive a payment prompt shortly.',
   paymentSuccess: 'END Payment successful. You can now view the betting tips.',
   paymentFailure: 'END Payment failed. Please try again later.',
-  invalidPhone: 'END Invalid phone number format. Please use your MPesa registered number.',
-  notPaid: 'CON You need to pay Ksh 5 to view tips.\n3. Make Payment\n0. Back',
-  processingPayment: 'END We are processing your payment. Try again in 1 minute.'
+  invalidPhone: 'END Invalid phone number format. Please use your MPesa registered number.'
 };
-
-// In-memory payment tracking (replace with database in production)
-const paymentTracker = new Map();
 
 // Cache implementation
 const cache = {
@@ -68,7 +61,7 @@ async function mainHandler(event) {
 
   try {
     if (text === '') return textResponse(RESPONSES.mainMenu);
-    if (lastInput === '1') return await handlePredictions(phoneNumber);
+    if (lastInput === '1') return await handlePredictions();
     if (lastInput === '2') return textResponse(RESPONSES.about);
     if (lastInput === '3') return await initiateMpesaPayment(phoneNumber);
     if (lastInput === '0') return textResponse(RESPONSES.mainMenu);
@@ -79,14 +72,7 @@ async function mainHandler(event) {
   }
 }
 
-async function handlePredictions(phoneNumber) {
-  // Check if user has paid
-  const hasPaid = await verifyPayment(phoneNumber);
-  
-  if (!hasPaid) {
-    return textResponse(RESPONSES.notPaid);
-  }
-
+async function handlePredictions() {
   const tips = await scrapeBetstudyPredictions();
   
   if (tips.length === 0) {
@@ -101,39 +87,6 @@ async function handlePredictions(phoneNumber) {
     .join('\n\n');
 
   return textResponse(`CON Today's Top Matches:\n${formattedTips}\n0. Back`);
-}
-
-async function verifyPayment(phoneNumber) {
-  try {
-    // In production, replace this with actual database check
-    // This is just a simulation using our in-memory tracker
-    const formattedPhone = formatPhoneNumber(phoneNumber);
-    
-    // Check in-memory tracker (simulating database check)
-    if (paymentTracker.has(formattedPhone)) {
-      return true;
-    }
-    
-    // Simulate API call to payment verification service
-    const response = await axios.get(PAYMENT_VERIFICATION_URL, {
-      params: {
-        phoneNumber: formattedPhone,
-        amount: PAYMENT_AMOUNT
-      },
-      timeout: 3000
-    });
-    
-    if (response.data && response.data.paid) {
-      // Cache the payment status
-      paymentTracker.set(formattedPhone, true);
-      return true;
-    }
-    
-    return false;
-  } catch (error) {
-    console.error('Payment verification error:', error.message);
-    return false;
-  }
 }
 
 async function scrapeBetstudyPredictions() {
@@ -176,6 +129,7 @@ async function scrapeBetstudyPredictions() {
 
 async function getMpesaAccessToken() {
   try {
+    // Create Base64 encoded auth string
     const authString = Buffer.from(`${MPESA_CONSUMER_KEY}:${MPESA_CONSUMER_SECRET}`).toString('base64');
     
     const response = await axios.get(MPESA_AUTH_URL, {
@@ -196,16 +150,18 @@ async function getMpesaAccessToken() {
 
 function formatPhoneNumber(phoneNumber) {
   try {
+    // Remove any non-digit characters
     const digitsOnly = phoneNumber.replace(/\D/g, '');
     
+    // Handle different phone number formats
     if (digitsOnly.startsWith('254')) {
-      return digitsOnly;
+      return digitsOnly; // Already in correct format
     } else if (digitsOnly.startsWith('0') && digitsOnly.length === 10) {
-      return `254${digitsOnly.substring(1)}`;
+      return `254${digitsOnly.substring(1)}`; // Convert 07... to 2547...
     } else if (digitsOnly.startsWith('7') && digitsOnly.length === 9) {
-      return `254${digitsOnly}`;
+      return `254${digitsOnly}`; // Convert 7... to 2547...
     } else if (digitsOnly.length === 12 && digitsOnly.startsWith('254')) {
-      return digitsOnly;
+      return digitsOnly; // Full 12-digit international format
     }
     
     throw new Error('Invalid phone number format');
@@ -217,16 +173,14 @@ function formatPhoneNumber(phoneNumber) {
 
 async function initiateMpesaPayment(phoneNumber) {
   try {
+    // Validate and format phone number
     const formattedPhone = formatPhoneNumber(phoneNumber);
     console.log(`Formatted phone number: ${formattedPhone}`);
 
-    // First check if already paid
-    const hasPaid = await verifyPayment(formattedPhone);
-    if (hasPaid) {
-      return await handlePredictions(formattedPhone);
-    }
-
+    // Step 1: Get authentication token
     const accessToken = await getMpesaAccessToken();
+
+    // Step 2: Prepare STK push request
     const timestamp = new Date()
       .toISOString()
       .replace(/[^0-9]/g, '')
@@ -238,7 +192,7 @@ async function initiateMpesaPayment(phoneNumber) {
       Password: password,
       Timestamp: timestamp,
       TransactionType: 'CustomerPayBillOnline',
-      Amount: PAYMENT_AMOUNT.toString(),
+      Amount: '5', // KSH 5
       PartyA: formattedPhone,
       PartyB: MPESA_SHORTCODE,
       PhoneNumber: formattedPhone,
@@ -249,6 +203,7 @@ async function initiateMpesaPayment(phoneNumber) {
 
     console.log('MPesa Payment Request:', paymentData);
 
+    // Step 3: Send STK push request
     const response = await axios.post(MPESA_STK_PUSH_URL, paymentData, {
       headers: {
         'Authorization': `Bearer ${accessToken}`,
@@ -256,10 +211,9 @@ async function initiateMpesaPayment(phoneNumber) {
       }
     });
 
+    // Check if payment request was successful
     if (response.data.ResponseCode === '0') {
-      // Mark as processing (in production, wait for callback)
-      paymentTracker.set(formattedPhone, 'processing');
-      return textResponse(RESPONSES.processingPayment);
+      return textResponse(RESPONSES.paymentPrompt);
     } else {
       console.error('MPesa Payment failed:', response.data);
       return textResponse(RESPONSES.paymentFailure);
@@ -303,4 +257,4 @@ function errorResponse(error) {
     headers: { 'Content-Type': 'text/plain' },
     body: error.message.includes('Timeout') ? RESPONSES.timeout : RESPONSES.error
   };
-}
+}cd 
