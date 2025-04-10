@@ -1,0 +1,10 @@
+{
+  "name": "ussd-betting-tips",
+  "version": "1.0.0",
+  "type": "module",
+  "dependencies": {
+    "axios": "^1.6.2",
+    "cheerio": "^1.0.0",
+    "unirest": "^0.6.0"
+  }
+}
